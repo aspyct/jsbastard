@@ -122,24 +122,21 @@
         lint: function (complain, parentContext) {
             var i,
                 instruction,
-                element,
+                instructionAst,
                 context;
 
             context = new Context(parentContext);
 
             for (i = 0; i < this.ast.length; i += 1) {
-                instruction = this.ast[i];
-                element = this.makeElement(instruction);
-                if (element !== null) {
-                    element.lint(complain, context);
-                } else {
-                    console.warn("Unhandled instruction: " + instruction.type);
+                instructionAst = this.ast[i];
+                instruction = this.makeInstruction(instructionAst);
+                if (instruction !== null) {
+                    instruction.lint(complain, context);
                 }
-
                 context.position += 1;
             }
         },
-        makeElement: function (ast) {
+        makeInstruction: function (ast) {
             if (InstructionTypes.hasOwnProperty(ast.type)) {
                 return new InstructionTypes[ast.type](ast);
             }
@@ -171,14 +168,17 @@
     };
 
     InstructionTypes.FunctionDeclaration.prototype = {
-        lint: function (complain) {
+        lint: function (complain, parentContext) {
+            var body;
+
             complain({
                 message: "Do not declare named functions",
                 line: this.ast.loc.start.line,
                 column: this.ast.loc.start.column
             });
 
-            new Body(this.ast.body).lint(complain);
+            body = new Body(this.ast.body.body);
+            body.lint(complain, new Context(parentContext));
         }
     };
 
