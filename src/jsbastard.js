@@ -26,9 +26,16 @@
         Body,
         Comments,
         ForStatement,
-        VariableDeclaration,
         Declaration,
-        FunctionDeclaration;
+        Context,
+        ExpressionTypes,
+        InstructionTypes;
+
+    Context = function (parent) {
+        this.parent = parent !== undefined ? parent : null;
+        this.usingStrict = false;
+        this.position = 0;
+    };
 
     Bastard = function (options) {
         this.options = {
@@ -41,7 +48,7 @@
                 new Script(ast).lint(function (complaint) {
                     complaint.filename = filename;
                     callback(complaint);
-                });
+                }, new Context());
             });
         },
         withJavascriptFile: function (filename, callback) {
@@ -64,11 +71,13 @@
 
     };
     Script.prototype = {
-        lint: function (complain) {
+        lint: function (complain, parentContext) {
             var closure,
                 body,
-                comments;
+                comments,
+                context;
 
+            context = new Context(parentContext);
             closure = new Closure(this.ast);
 
             if (closure.isActualClosure()) {
@@ -85,8 +94,8 @@
 
             comments = new Comments(this.ast.comments);
 
-            body.lint(complain);
-            comments.lint(complain);
+            body.lint(complain, context);
+            comments.lint(complain, context);
         }
     };
 
@@ -102,7 +111,7 @@
                 this.ast.body[0].expression.callee.body.type === 'BlockStatement';
         },
         body: function () {
-            return this.ast.body[0].expression.callee.body.body;
+            return new Body(this.ast.body[0].expression.callee.body.body);
         }
     };
 
@@ -110,42 +119,61 @@
         this.ast = ast;
     };
     Body.prototype = {
-        lint: function (complain) {
+        lint: function (complain, parentContext) {
             var i,
                 instruction,
-                element;
+                element,
+                context;
+
+            context = new Context(parentContext);
 
             for (i = 0; i < this.ast.length; i += 1) {
                 instruction = this.ast[i];
-                element = this.makeElement(instruction, i);
+                element = this.makeElement(instruction);
                 if (element !== null) {
-                    element.lint(complain);
+                    element.lint(complain, context);
                 } else {
                     console.warn("Unhandled instruction: " + instruction.type);
                 }
+
+                context.position += 1;
             }
         },
-        makeElement: function (ast, positionInParent) {
-            switch (ast.type) {
-            case 'ForStatement':
-                return new ForStatement(ast, positionInParent);
-            case 'VariableDeclaration':
-                return new VariableDeclaration(ast, positionInParent);
-            case 'FunctionDeclaration':
-                return new FunctionDeclaration(ast, positionInParent);
-            default:
-                return null;
+        makeElement: function (ast) {
+            if (InstructionTypes.hasOwnProperty(ast.type)) {
+                return new InstructionTypes[ast.type](ast);
             }
+
+            console.warn("Unhandled instruction type: " + ast.type);
+            return null;
         }
     };
 
-    FunctionDeclaration = function (ast) {
-        this.ast = ast;
+    InstructionTypes = {
+        FunctionDeclaration: function (ast) {
+            this.ast = ast;
+        },
+        VariableDeclaration: function (ast) {
+            this.ast = ast;
+        },
+        ForStatement: function (ast) {
+            this.ast = ast;
+        },
+        EmptyStatement: function (ast) {
+            this.ast = ast;
+        },
+        ExpressionStatement: function (ast) {
+            this.ast = ast;
+        },
+        IfStatement: function (ast) {
+            this.ast = ast;
+        }
     };
-    FunctionDeclaration.prototype = {
+
+    InstructionTypes.FunctionDeclaration.prototype = {
         lint: function (complain) {
             complain({
-                message: "Do not declared named functions",
+                message: "Do not declare named functions",
                 line: this.ast.loc.start.line,
                 column: this.ast.loc.start.column
             });
@@ -154,16 +182,72 @@
         }
     };
 
-    VariableDeclaration = function (ast, positionInParent) {
-        this.ast = ast;
-        this.positionInParent = positionInParent;
-    };
-    VariableDeclaration.prototype = {
+    InstructionTypes.EmptyStatement.prototype = {
         lint: function (complain) {
+            complain({
+                message: "Empty statement",
+                line: this.ast.loc.start.line,
+                column: this.ast.loc.start.column
+            });
+        }
+    };
+
+    InstructionTypes.ExpressionStatement.prototype = {
+        lint: function (complain, parentContext) {
+            var expression,
+                context;
+
+            context = new Context(parentContext);
+
+            if (this.isUseStrict()) {
+                parentContext.usingStrict = true;
+            } else {
+                expression = this.makeExpression(this.ast.expression);
+
+                if (expression !== null) {
+                    expression.lint(complain, context);
+                }
+            }
+        },
+        isUseStrict: function () {
+            return this.ast.type === 'ExpressionStatement' &&
+                this.ast.expression.type === 'Literal' &&
+                this.ast.expression.value === 'use strict';
+        },
+        makeExpression: function (ast) {
+            if (ExpressionTypes.hasOwnProperty(ast.type)) {
+                return new ExpressionTypes[ast.type](ast.expression);
+            }
+
+            console.warn("Unhandled expression type: " + ast.type);
+            return null;
+        }
+    };
+
+    ExpressionTypes = {
+        AssignmentExpression: function (ast) {
+            this.ast = ast;
+        }
+    };
+
+    ExpressionTypes.AssignmentExpression.prototype = {
+        lint: function (complain, parentContext) {
+            
+        }
+    };
+
+    InstructionTypes.IfStatement.prototype = {
+        lint: function (complain) {
+
+        }
+    };
+
+    InstructionTypes.VariableDeclaration.prototype = {
+        lint: function (complain, parentContext) {
             var i,
                 declaration;
 
-            if (this.positionInParent !== 0) {
+            if (!this.isFirstInContext(parentContext)) {
                 complain({
                     message: "Variable declarations must be at the top of functions",
                     line: this.ast.loc.start.line,
@@ -175,6 +259,10 @@
                 declaration = new Declaration(this.ast.declarations[i]);
                 declaration.lint(complain);
             }
+        },
+        isFirstInContext: function (parentContext) {
+            return parentContext.position === 0 ||
+                (parentContext.position === 1 && parentContext.usingStrict);
         }
     };
 
